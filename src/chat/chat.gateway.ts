@@ -115,6 +115,33 @@ export class ChatGateway {
   }
 
   /**
+   * Delete a Room
+   */
+  @SubscribeMessage('deleteRoom')
+  deleteRoom(
+    @MessageBody() data: { roomId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const { roomId } = data;
+
+    if (!this.rooms.has(roomId)) {
+      client.emit('error', `Room ${roomId} does not exist`);
+      return;
+    }
+
+    this.server
+      .to(roomId)
+      .emit('roomDeleted', { message: `Room ${roomId} has been deleted.` });
+
+    this.rooms.delete(roomId);
+    this.users.delete(roomId);
+    // Notify all clients about the updated room list
+    this.server.emit('rooms', Array.from(this.rooms.values()));
+
+    console.log(`Room deleted: ${roomId}`);
+  }
+
+  /**
    * Send a message to a room
    */
   @SubscribeMessage('sendMessage')
@@ -129,21 +156,36 @@ export class ChatGateway {
       return;
     }
 
-    // const groupMessage: GroupMessage = {
-    //   roomId: roomId,
-    //   message: message,
-    //   userName: userName,
-    // };
-
-    // if (!this.groupMessages.has(roomId)) {
-    //   this.groupMessages.set(roomId, []);
-    // }
-
-    // this.groupMessages.get(roomId)?.push(groupMessage);
-
     this.server.to(roomId).emit('newMessage', { userId: userName, message });
 
     console.log(`Message sent to room ${roomId}: ${message}`);
+  }
+
+  @SubscribeMessage('leaveRoom')
+  leaveRoom(
+    @MessageBody() data: { roomId: string; userName: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const { roomId, userName } = data;
+
+    if (!this.rooms.has(roomId)) {
+      client.emit('error', `Room ${roomId} does not exist`);
+      return;
+    }
+
+    // Remove the user from the room
+    const usersInRoom = this.users.get(roomId) || [];
+    const updatedUsers = usersInRoom.filter(
+      (user) => user.userId !== client.id,
+    );
+    this.users.set(roomId, updatedUsers);
+
+    // Notify other users in the room
+    client.to(roomId).emit('userLeft', `${userName} has left the room`);
+
+    this.server.to(roomId).emit('totalUsers', usersInRoom);
+
+    console.log(`User ${userName} (${client.id}) left room ${roomId}`);
   }
 
   /**
@@ -165,5 +207,11 @@ export class ChatGateway {
         this.users.delete(roomId);
       }
     });
+  }
+
+  @SubscribeMessage('fetchRooms')
+  triggerFetchAvailableRooms() {
+    console.log(this.rooms);
+    this.server.emit('getRooms', Array.from(this.rooms.values()));
   }
 }
